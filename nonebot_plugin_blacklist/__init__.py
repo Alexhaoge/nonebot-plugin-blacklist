@@ -1,6 +1,7 @@
-import asyncio, random, unicodedata
-from pathlib import Path
+import asyncio, random
 from typing import Literal
+from nonebot import require
+require("nonebot_plugin_orm")
 
 from nonebot import get_driver, on_command, on_notice
 from nonebot.plugin import PluginMetadata
@@ -21,6 +22,9 @@ from nonebot.params import CommandArg
 
 import ujson as json
 
+from .utils import is_number
+from .blacklist import *
+from . import orm_migrations
 
 usage: str ="""
 
@@ -42,104 +46,46 @@ __plugin_meta__ = PluginMetadata(
     description="黑名单插件",
     usage=usage,
     type="application",
-    homepage="https://github.com/tkgs0/nonebot-plugin-blacklist"
+    homepage="https://github.com/tkgs0/nonebot-plugin-blacklist",
+    extra={
+        "orm_version_location": orm_migrations
+    }
 )
 
 
 superusers = get_driver().config.superusers
 
-file_path = Path() / 'data' / 'blacklist' / 'blacklist.json'
-file_path.parent.mkdir(parents=True, exist_ok=True)
-
-blacklist = (
-    json.loads(file_path.read_text('utf-8'))
-    if file_path.is_file()
-    else {}
-)
-
-template = {
-    'private': False,
-    'privlist': [],
-    'grouplist': [],
-    'userlist': [],
-    'ban_auto_sleep': True
-}
-
-
-def save_blacklist() -> None:
-    file_path.write_text(
-        json.dumps(
-            blacklist,
-            ensure_ascii=False,
-            escape_forward_slashes=False,
-            indent=2
-        ),
-        encoding='utf-8'
-    )
-
-
-def check_self_id(self_id) -> str:
-    self_id = f'{self_id}'
-    temp: dict = {}
-    temp.update(template)
-
-    try:
-        if not blacklist.get(self_id):
-            blacklist.update({
-                self_id: temp
-            })
-            save_blacklist()
-        for i in template:
-            if blacklist[self_id].get(i) == None:
-                blacklist[self_id].update({i: temp[i]})
-                save_blacklist()
-    except Exception:
-        blacklist.update({
-            self_id: temp
-        })
-        save_blacklist()
-
-    return self_id
-
-
-def is_number(s: str) -> bool:
-    try:
-        float(s)
-        return True
-    except ValueError:
-        pass
-    try:
-        unicodedata.numeric(s)
-        return True
-    except (TypeError, ValueError):
-        pass
-    return False
+get_driver().on_startup(load_db_to_redis)
 
 
 @event_preprocessor
-def blacklist_processor(event: Event):
-    self_id = check_self_id(event.self_id)
+async def blacklist_processor(event: Event):
     uid = vars(event).get('user_id')
     gid = vars(event).get('group_id')
 
     if uid and f'{uid}' in superusers:
         return
 
-    if gid and f'{gid}' in blacklist[self_id]['grouplist']:
-        logger.debug(f'群聊 {gid} 在 {self_id} 黑名单中, 忽略本次消息')
-        raise IgnoredException('黑名单群组')
+    if gid:
+        on_blacklist = await check_blacklist(gid, 'grouplist')
+        if on_blacklist:
+            logger.debug(f'群聊 {gid} 在黑名单中, 忽略本次消息')
+            raise IgnoredException('黑名单群组')
 
-    if uid and f'{uid}' in blacklist[self_id]['userlist']:
-        logger.debug(f'用户 {uid} 在 {self_id} 黑名单中, 忽略本次消息')
-        raise IgnoredException('黑名单用户')
+    if uid:
+        on_blacklist = await check_blacklist(uid, 'userlist')
+        if on_blacklist:
+            logger.debug(f'用户 {uid} 在黑名单中, 忽略本次消息')
+            raise IgnoredException('黑名单用户')
 
     if not gid and uid:
-        if not blacklist[self_id]['private'] or f'{uid}' in blacklist[self_id]['privlist']:
-            logger.debug(f'私聊 {uid} 在 {self_id} 黑名单中, 忽略本次消息')
+        on_blacklist = await check_blacklist(uid, 'privlist')
+        if on_blacklist:
+            logger.debug(f'私聊 {uid} 在黑名单中, 忽略本次消息')
             raise IgnoredException('黑名单会话')
 
 
-def handle_msg(
+async def handle_msg(
     self_id,
     arg,
     mode: Literal['add', 'del'],
@@ -151,32 +97,31 @@ def handle_msg(
     for uid in uids:
         if not is_number(uid):
             return '参数错误, id必须是数字..'
-    msg = handle_blacklist(self_id, uids, mode, type_)
+    msg = await handle_blacklist(self_id, uids, mode, type_)
     return msg
 
 
-def handle_blacklist(
+async def handle_blacklist(
     self_id,
     uids: list,
     mode: Literal['add', 'del'],
     type_: Literal['userlist', 'grouplist', 'privlist'],
 ) -> str:
-    self_id = check_self_id(self_id)
 
     types = {
         'userlist': '用户',
         'grouplist': '群聊',
         'privlist': '私聊',
     }
+    uids_str = [str(uid) for uid in uids]
 
     if mode == 'add':
-        blacklist[self_id][type_].extend(uids)
-        blacklist[self_id][type_] = list(set(blacklist[self_id][type_]))
+        await add_blacklist(uids_str, type_)
         _mode = '拉黑'
     elif mode == 'del':
-        blacklist[self_id][type_] = [uid for uid in blacklist[self_id][type_] if uid not in uids]
+        await del_blacklist(uids_str, type_)
         _mode = '解禁'
-    save_blacklist()
+    
     _type = types[type_]
     return f"已{_mode} {len(uids)} 个{_type}: {', '.join(uids)}"
 
@@ -245,52 +190,42 @@ check_userlist = on_command('查看用户黑名单', permission=SUPERUSER, prior
 
 @check_userlist.handle()
 async def check_user_list(event: MessageEvent, args: Message = CommandArg()):
-    arg = args.extract_plain_text().strip()
-    self_id = check_self_id(arg) if is_number(arg) else check_self_id(event.self_id)
-    uids = blacklist[self_id]['userlist']
-    await check_userlist.finish(f"{self_id}\n当前已屏蔽 {len(uids)} 个用户: {', '.join(uids)}")
+    uids = await view_blacklist('userlist')
+    await check_userlist.finish(f"当前已屏蔽 {len(uids)} 个用户: {', '.join(uids)}")
 
 
 check_grouplist = on_command('查看群聊黑名单', permission=SUPERUSER, priority=1, block=True)
 
 @check_grouplist.handle()
 async def check_group_list(event: MessageEvent, args: Message = CommandArg()):
-    arg = args.extract_plain_text().strip()
-    self_id = check_self_id(arg) if is_number(arg) else check_self_id(event.self_id)
-    gids = blacklist[self_id]['grouplist']
-    await check_grouplist.finish(f"{self_id}\n自觉静默: {'开' if blacklist[self_id]['ban_auto_sleep'] else '关'}\n当前已屏蔽 {len(gids)} 个群聊: {', '.join(gids)}")
+    gids = await view_blacklist('grouplist')
+    ban_auto_sleep = await get_setting('ban_auto_sleep')
+    await check_grouplist.finish(f"自觉静默: {'开' if ban_auto_sleep else '关'}\n当前已屏蔽 {len(gids)} 个群聊: {', '.join(gids)}")
 
 
 check_privlist = on_command('查看私聊黑名单', permission=SUPERUSER, priority=1, block=True)
 
 @check_privlist.handle()
 async def check_priv_list(event: MessageEvent, args: Message = CommandArg()):
-    arg = args.extract_plain_text().strip()
-    self_id = check_self_id(arg) if is_number(arg) else check_self_id(event.self_id)
-    uids = blacklist[self_id]['privlist']
-    await check_privlist.finish(f"{self_id}\n私聊状态: {'响应' if blacklist[self_id]['private'] else '静默'}\n当前已屏蔽 {len(uids)} 个私聊: {', '.join(uids)}")
+    uids = await view_blacklist('privlist')
+    private = await get_setting('private')
+    await check_privlist.finish(f"私聊状态: {'响应' if private else '静默'}\n当前已屏蔽 {len(uids)} 个私聊: {', '.join(uids)}")
 
 
 enable_private = on_command('私聊响应', aliases={'私聊启用','响应私聊', '启用私聊'}, permission=SUPERUSER, priority=1, block=True)
 
 @enable_private.handle()
 async def _(event: MessageEvent, args: Message = CommandArg()):
-    arg = args.extract_plain_text().strip()
-    self_id = check_self_id(arg) if is_number(arg) else check_self_id(event.self_id)
-    blacklist[self_id]['private'] = True
-    save_blacklist()
-    await enable_private.finish(f'{self_id} 私聊响应.')
+    await set_setting('private', True)
+    await enable_private.finish(f'私聊响应.')
 
 
 disable_private = on_command('私聊静默', aliases={'私聊禁用', '静默私聊', '禁用私聊'}, permission=SUPERUSER, priority=1, block=True)
 
 @disable_private.handle()
 async def _(event: MessageEvent, args: Message = CommandArg()):
-    arg = args.extract_plain_text().strip()
-    self_id = check_self_id(arg) if is_number(arg) else check_self_id(event.self_id)
-    blacklist[self_id]['private'] = False
-    save_blacklist()
-    await disable_private.finish(f'{self_id} 私聊静默.')
+    await set_setting('private', False)
+    await disable_private.finish(f'私聊静默.')
 
 
 add_group = on_command('/静默', permission=SUPERUSER, priority=1, block=True)
@@ -355,44 +290,44 @@ reset_all_blacklist = on_command('重置所有黑名单', aliases={'清空所有
 async def reset_all_list(matcher: Matcher):
     flag = matcher.state['FLAG'].extract_plain_text().strip()
     if flag.lower() in ['y', 'yes', 'true']:
-        blacklist.clear()
-        save_blacklist()
+        
         await reset_all_blacklist.finish('已重置所有黑名单')
     else:
         await reset_all_blacklist.finish('操作已取消')
 
 
-reset_blacklist = on_command('重置黑名单', aliases={'清空黑名单'}, permission=SUPERUSER, priority=1, block=True)
+# reset_blacklist = on_command('重置黑名单', aliases={'清空黑名单'}, permission=SUPERUSER, priority=1, block=True)
 
-@reset_blacklist.handle()
-async def _(matcher: Matcher, args: Message = CommandArg()):
-    matcher.state["ARGS"] = args.extract_plain_text().strip()
+# @reset_blacklist.handle()
+# async def _(matcher: Matcher, args: Message = CommandArg()):
+#     matcher.state["ARGS"] = args.extract_plain_text().strip()
 
-@reset_blacklist.got('FLAG', prompt='确定重置黑名单? (y/n)')
-async def reset_list(event: MessageEvent, matcher: Matcher):
-    args = matcher.state['ARGS']
-    flag = matcher.state['FLAG'].extract_plain_text().strip()
+# @reset_blacklist.got('FLAG', prompt='确定重置黑名单? (y/n)')
+# async def reset_list(event: MessageEvent, matcher: Matcher):
+#     args = matcher.state['ARGS']
+#     flag = matcher.state['FLAG'].extract_plain_text().strip()
 
-    uids = args.strip().split()
-    uids = [check_self_id(i) for i in uids if is_number(i)] or [check_self_id(event.self_id)]
+#     uids = args.strip().split()
+#     uids = [check_self_id(i) for i in uids if is_number(i)] or [check_self_id(event.self_id)]
 
-    if flag.lower() in ['y', 'yes', 'true']:
-        for i in uids:
-            blacklist.pop(i)
-        save_blacklist()
-        await reset_blacklist.finish(f'已重置{len(uids)}个黑名单')
-    else:
-        await reset_blacklist.finish('操作已取消')
+#     if flag.lower() in ['y', 'yes', 'true']:
+#         for i in uids:
+#             blacklist.pop(i)
+#         save_blacklist()
+#         await reset_blacklist.finish(f'已重置{len(uids)}个黑名单')
+#     else:
+#         await reset_blacklist.finish('操作已取消')
 
 
 @on_notice(priority=2, block=False).handle()
 async def _(bot: Bot, event: GroupBanNoticeEvent):
-    self_id = check_self_id(event.self_id)
+    self_id = event.self_id
 
     if event.is_tome() and event.duration:
         msg = f"在群聊 {event.group_id} 受到 {event.operator_id} 禁言"
         logger.info(f'{self_id} {msg}')
-        if blacklist[self_id]['ban_auto_sleep']:
+        is_ban_auto_sleep = await get_setting('ban_auto_sleep')
+        if is_ban_auto_sleep:
             handle_blacklist(self_id, [f'{event.group_id}'], 'add', 'grouplist')
             for superuser in bot.config.superusers:
                 await bot.send_private_msg(
@@ -406,16 +341,16 @@ ban_auto_sleep = on_command('自觉静默', permission=SUPERUSER, priority=1, bl
 
 @ban_auto_sleep.handle()
 async def _(event: MessageEvent, arg: Message = CommandArg()):
-    self_id = check_self_id(event.self_id)
+    # self_id = check_self_id(event.self_id)
     msg = arg.extract_plain_text().strip()
 
     if not msg or msg.startswith('开'):
-        blacklist[self_id]['ban_auto_sleep'] = True
+        await set_setting('ban_auto_sleep', True)
         text = '自觉静默已开启.'
     elif msg.startswith('关'):
-        blacklist[self_id]['ban_auto_sleep'] = False
+        await set_setting('ban_auto_sleep', False)
         text = '自觉静默已关闭.'
     else:
         return
-    save_blacklist()
+
     await ban_auto_sleep.finish(text)
