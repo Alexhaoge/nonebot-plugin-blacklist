@@ -54,7 +54,7 @@ async def del_blacklist(ids: list[str], type_: Literal['userlist', 'grouplist', 
 
 async def clearall_blacklist():
     async with use_redis_client() as client:
-        await client.delete('userlist', 'grouplist', 'privlist')
+        await client.delete('blacklist_userlist', 'blacklist_grouplist', 'blacklist_privlist')
     async with use_ac_session() as session:
         await session.execute(delete(BlacklistORM))
         await session.commit()
@@ -67,7 +67,7 @@ async def view_blacklist(type_: Literal['userlist', 'grouplist', 'privlist']):
 async def get_setting(type_: Literal['private', 'ban_auto_sleep']):
     async with use_redis_client() as client:
         setting = await client.get(f'blacklist_{type_}')
-        return setting if setting else False
+        return int(setting) if setting else False
     
 async def set_setting(type_: Literal['private', 'ban_auto_sleep'], value: bool):
     async with use_redis_client() as client:

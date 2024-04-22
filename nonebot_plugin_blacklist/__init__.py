@@ -131,9 +131,9 @@ add_userlist = on_command('拉黑用户', aliases={'屏蔽用户'}, permission=S
 @add_userlist.handle()
 async def add_user_list(event: MessageEvent, arg: Message = CommandArg()):
     if uids := [at.data['qq'] for at in event.get_message()['at']]:
-        msg = handle_blacklist(event.self_id, uids, 'add', 'userlist')
+        msg = await handle_blacklist(event.self_id, uids, 'add', 'userlist')
         await add_userlist.finish(msg)
-    msg = handle_msg(event.self_id, arg, 'add', 'userlist')
+    msg = await handle_msg(event.self_id, arg, 'add', 'userlist')
     await add_userlist.finish(msg)
 
 
@@ -141,7 +141,7 @@ add_grouplist = on_command('拉黑群', aliases={'屏蔽群'}, permission=SUPERU
 
 @add_grouplist.handle()
 async def add_group_list(event: MessageEvent, arg: Message = CommandArg()):
-    msg = handle_msg(event.self_id, arg, 'add', 'grouplist')
+    msg = await handle_msg(event.self_id, arg, 'add', 'grouplist')
     await add_grouplist.finish(msg)
 
 
@@ -150,9 +150,9 @@ add_privlist = on_command('拉黑私聊', aliases={'屏蔽私聊'}, permission=S
 @add_privlist.handle()
 async def add_priv_list(event: MessageEvent, arg: Message = CommandArg()):
     if uids := [at.data['qq'] for at in event.get_message()['at']]:
-        msg = handle_blacklist(event.self_id, uids, 'add', 'privlist')
+        msg = await handle_blacklist(event.self_id, uids, 'add', 'privlist')
         await add_privlist.finish(msg)
-    msg = handle_msg(event.self_id, arg, 'add', 'privlist')
+    msg = await handle_msg(event.self_id, arg, 'add', 'privlist')
     await add_privlist.finish(msg)
 
 
@@ -161,9 +161,9 @@ del_userlist = on_command('解禁用户', aliases={'解封用户'}, permission=S
 @del_userlist.handle()
 async def del_user_list(event: MessageEvent, arg: Message = CommandArg()):
     if uids := [at.data['qq'] for at in event.get_message()['at']]:
-        msg = handle_blacklist(event.self_id, uids, 'del', 'userlist')
+        msg = await handle_blacklist(event.self_id, uids, 'del', 'userlist')
         await del_userlist.finish(msg)
-    msg = handle_msg(event.self_id, arg, 'del', 'userlist')
+    msg = await handle_msg(event.self_id, arg, 'del', 'userlist')
     await del_userlist.finish(msg)
 
 
@@ -171,7 +171,7 @@ del_grouplist = on_command('解禁群', aliases={'解封群'}, permission=SUPERU
 
 @del_grouplist.handle()
 async def del_group_list(event: MessageEvent, arg: Message = CommandArg()):
-    msg = handle_msg(event.self_id, arg, 'del', 'grouplist')
+    msg = await handle_msg(event.self_id, arg, 'del', 'grouplist')
     await del_grouplist.finish(msg)
 
 
@@ -180,9 +180,9 @@ del_privlist = on_command('解禁私聊', aliases={'解封私聊'}, permission=S
 @del_privlist.handle()
 async def del_priv_list(event: MessageEvent, arg: Message = CommandArg()):
     if uids := [at.data['qq'] for at in event.get_message()['at']]:
-        msg = handle_blacklist(event.self_id, uids, 'del', 'privlist')
+        msg = await handle_blacklist(event.self_id, uids, 'del', 'privlist')
         await del_privlist.finish(msg)
-    msg = handle_msg(event.self_id, arg, 'del', 'privlist')
+    msg = await handle_msg(event.self_id, arg, 'del', 'privlist')
     await del_privlist.finish(msg)
 
 
@@ -200,6 +200,7 @@ check_grouplist = on_command('查看群聊黑名单', permission=SUPERUSER, prio
 async def check_group_list(event: MessageEvent, args: Message = CommandArg()):
     gids = await view_blacklist('grouplist')
     ban_auto_sleep = await get_setting('ban_auto_sleep')
+    print(type(ban_auto_sleep))
     await check_grouplist.finish(f"自觉静默: {'开' if ban_auto_sleep else '关'}\n当前已屏蔽 {len(gids)} 个群聊: {', '.join(gids)}")
 
 
@@ -232,7 +233,7 @@ add_group = on_command('/静默', permission=SUPERUSER, priority=1, block=True)
 
 @add_group.handle()
 async def add_group_(event: GroupMessageEvent):
-    handle_blacklist(event.self_id, [f'{event.group_id}'], 'add', 'grouplist')
+    await handle_blacklist(event.self_id, [f'{event.group_id}'], 'add', 'grouplist')
     await add_group.finish('那我先去睡觉了...')
 
 
@@ -240,7 +241,7 @@ del_group = on_command('/响应', permission=SUPERUSER, priority=1, block=True)
 
 @del_group.handle()
 async def del_group_(event: GroupMessageEvent):
-    handle_blacklist(event.self_id, [f'{event.group_id}'], 'del', 'grouplist')
+    await handle_blacklist(event.self_id, [f'{event.group_id}'], 'del', 'grouplist')
     await del_group.finish('呜......醒来力...')
 
 
@@ -250,7 +251,7 @@ add_all_group = on_command('拉黑所有群', aliases={'屏蔽所有群'}, permi
 async def add_all_group_(bot: Bot, event: MessageEvent):
     gl = await bot.get_group_list()
     gids = ['{group_id}'.format_map(g) for g in gl]
-    handle_blacklist(event.self_id, gids, 'add', 'grouplist')
+    await handle_blacklist(event.self_id, gids, 'add', 'grouplist')
     await add_all_group.finish(f'已拉黑 {len(gids)} 个群聊')
 
 
@@ -260,7 +261,7 @@ del_all_group = on_command('解禁所有群', aliases={'解封所有群'}, permi
 async def del_all_group_(bot: Bot, event: MessageEvent):
     gl = await bot.get_group_list()
     gids = ['{group_id}'.format_map(g) for g in gl]
-    handle_blacklist(event.self_id, gids, 'del', 'grouplist')
+    await handle_blacklist(event.self_id, gids, 'del', 'grouplist')
     await del_all_group.finish(f'已解禁 {len(gids)} 个群聊')
 
 
@@ -270,7 +271,7 @@ add_all_friend = on_command('拉黑所有好友', aliases={'屏蔽所有好友'}
 async def add_all_friend_(bot: Bot, event: MessageEvent):
     gl = await bot.get_friend_list()
     uids = ['{user_id}'.format_map(g) for g in gl]
-    handle_blacklist(event.self_id, uids, 'add', 'userlist')
+    await handle_blacklist(event.self_id, uids, 'add', 'userlist')
     await add_all_friend.finish(f'已拉黑 {len(uids)} 个用户')
 
 
@@ -280,7 +281,7 @@ del_all_friend = on_command('解禁所有好友', aliases={'解封所有好友'}
 async def del_all_friend_(bot: Bot, event: MessageEvent):
     gl = await bot.get_friend_list()
     uids = ['{user_id}'.format_map(g) for g in gl]
-    handle_blacklist(event.self_id, uids, 'del', 'userlist')
+    await handle_blacklist(event.self_id, uids, 'del', 'userlist')
     await del_all_friend.finish(f'已解禁 {len(uids)} 个用户')
 
 
@@ -290,7 +291,7 @@ reset_all_blacklist = on_command('重置所有黑名单', aliases={'清空所有
 async def reset_all_list(matcher: Matcher):
     flag = matcher.state['FLAG'].extract_plain_text().strip()
     if flag.lower() in ['y', 'yes', 'true']:
-        
+        await clearall_blacklist()
         await reset_all_blacklist.finish('已重置所有黑名单')
     else:
         await reset_all_blacklist.finish('操作已取消')
@@ -328,7 +329,7 @@ async def _(bot: Bot, event: GroupBanNoticeEvent):
         logger.info(f'{self_id} {msg}')
         is_ban_auto_sleep = await get_setting('ban_auto_sleep')
         if is_ban_auto_sleep:
-            handle_blacklist(self_id, [f'{event.group_id}'], 'add', 'grouplist')
+            await handle_blacklist(self_id, [f'{event.group_id}'], 'add', 'grouplist')
             for superuser in bot.config.superusers:
                 await bot.send_private_msg(
                     user_id=int(superuser),
