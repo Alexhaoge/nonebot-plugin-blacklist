@@ -1,7 +1,7 @@
 from typing import Literal, Optional
 
 from nonebot import get_driver
-from pydantic import BaseSettings
+from pydantic.v1 import BaseSettings
 
 class Config(BaseSettings):
     redis_url: str = 'redis://localhost'
